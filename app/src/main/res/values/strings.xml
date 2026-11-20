@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">NeuroTalks</string>
+    <string name="prototype_badge">Prototype • Local Demo Data</string>
+    <string name="welcome_cta">Explore Your Space</string>
+    <string name="guidelines_title">Community Guidelines</string>
+    <string name="emergency_title">Emergency Support</string>
+    <string name="podcast_title">NeuroTalks Podcast</string>
+    <string name="simulation_title">Ideal Life Simulation</string>
+    <string name="forum_title">Community Forum</string>
+    <string name="profile_title">Anonymous Profile</string>
+</resources>

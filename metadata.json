@@ -1,0 +1,6 @@
+{
+  "name": "NeuroTalks",
+  "description": "Mental wellness and emotional support prototype featuring calm podcasts, ideal life simulations, an anonymous community forum, and crisis resources.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
