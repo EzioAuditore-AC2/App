@@ -1,8 +1,9 @@
 package com.example.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -22,74 +23,84 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
-import androidx.compose.material.icons.rounded.ExpandLess
-import androidx.compose.material.icons.rounded.ExpandMore
-import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.R
-import com.example.data.DemoRepository
-import com.example.data.PodcastEpisode
-import com.example.data.PodcastStyle
-import com.example.ui.components.PrototypeBadge
+import com.example.podcast.PodcastCategory
+import com.example.podcast.RealPodcastEpisode
 import com.example.ui.components.SectionHeader
-import com.example.ui.components.formatDurationSeconds
-import com.example.ui.theme.ForestDeep
-import com.example.ui.theme.SageSoft
 import com.example.viewmodel.NeuroTalksUiState
+import kotlinx.coroutines.launch
 
 @Composable
 fun PodcastScreen(
     uiState: NeuroTalksUiState,
-    onSelectTopic: (String) -> Unit,
-    onSelectStyle: (PodcastStyle) -> Unit,
+    onRefreshFeeds: (Boolean) -> Unit,
+    onSelectCategory: (PodcastCategory) -> Unit,
+    onToggleStreamableOnly: () -> Unit,
     onSelectEpisode: (String) -> Unit,
-    onTogglePlayPause: () -> Unit,
-    onSeek: (Int) -> Unit,
-    onSkip: (Int) -> Unit,
-    onCycleSpeed: () -> Unit,
+    onPlayStreamableEpisode: (RealPodcastEpisode) -> Unit,
+    onToggleMedia3PlayPause: () -> Unit,
+    onSeekMedia3Ms: (Long) -> Unit,
+    onSkipMedia3Ms: (Long) -> Unit,
+    onCycleMedia3Speed: () -> Unit,
+    onRecordExternalOpen: (RealPodcastEpisode, String) -> Unit,
     onToggleBookmark: (String) -> Unit
 ) {
-    val filteredEpisodes = remember(uiState.selectedPodcastTopic, uiState.selectedPodcastStyle) {
-        DemoRepository.podcastEpisodes.filter { ep ->
-            val topicOk = uiState.selectedPodcastTopic == "All Topics" || ep.topic == uiState.selectedPodcastTopic
-            val styleOk = uiState.selectedPodcastStyle == PodcastStyle.ALL || ep.style == uiState.selectedPodcastStyle
-            topicOk && styleOk
-        }
+    val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    val feedState = uiState.podcastFeed
+    val filteredEpisodes = feedState.filteredEpisodes
+    val activeStreamEpisode = remember(feedState.player.activeStreamEpisodeId, feedState.allEpisodes) {
+        feedState.allEpisodes.firstOrNull { it.id == feedState.player.activeStreamEpisodeId }
+    }
+    var detailSheetEpisode by remember { mutableStateOf<RealPodcastEpisode?>(null) }
+
+    LaunchedEffect(Unit) {
+        onRefreshFeeds(false)
     }
 
-    val currentEp = uiState.currentEpisode
+    fun launchExternalPodcast(episode: RealPodcastEpisode, url: String, platformLabel: String) {
+        val opened = openExternalUrl(context, url)
+        if (opened) {
+            onRecordExternalOpen(episode, platformLabel)
+        } else {
+            scope.launch {
+                snackbarHostState.showSnackbar("No app or browser available to open $platformLabel.")
+            }
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -104,206 +115,49 @@ fun PodcastScreen(
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Active Episode Player Card with Editorial Artwork
+            // Top Hero: Active Media3 In-App Player OR Featured Verified Podcast Card
             item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(28.dp),
-                    color = ForestDeep,
-                    shadowElevation = 4.dp
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(164.dp)
-                        ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.img_podcast_cover_1795175965182),
-                                contentDescription = "NeuroTalks podcast studio illustration with botanical ferns",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(
-                                        Brush.verticalGradient(
-                                            colors = listOf(
-                                                ForestDeep.copy(alpha = 0.2f),
-                                                ForestDeep.copy(alpha = 0.85f),
-                                                ForestDeep
-                                            )
-                                        )
-                                    )
-                            )
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                PrototypeBadge(text = "DEMO AUDIO PLAYER", inverted = true)
-                                IconButton(
-                                    onClick = { onToggleBookmark(currentEp.id) },
-                                    modifier = Modifier.testTag("podcast_player_bookmark")
-                                ) {
-                                    Icon(
-                                        imageVector = if (currentEp.id in uiState.bookmarkedEpisodeIds) {
-                                            Icons.Rounded.Bookmark
-                                        } else {
-                                            Icons.Rounded.BookmarkBorder
-                                        },
-                                        contentDescription = "Bookmark current episode",
-                                        tint = Color(0xFFFAF6EE)
-                                    )
-                                }
-                            }
-                            Column(
-                                modifier = Modifier
-                                    .align(Alignment.BottomStart)
-                                    .padding(horizontal = 20.dp, vertical = 10.dp)
-                            ) {
-                                Text(
-                                    text = "${currentEp.topic} • ${currentEp.style.label}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = SageSoft
-                                )
-                                Text(
-                                    text = currentEp.title,
-                                    style = MaterialTheme.typography.titleLarge,
-                                    color = Color(0xFFFAF6EE)
-                                )
-                                Text(
-                                    text = currentEp.host,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = SageSoft.copy(alpha = 0.85f)
-                                )
-                            }
+                if (feedState.player.activeStreamEpisodeId != null) {
+                    Media3ActivePlayerCard(
+                        player = feedState.player,
+                        activeEpisode = activeStreamEpisode,
+                        isBookmarked = feedState.player.activeStreamEpisodeId in feedState.bookmarkedIds,
+                        onTogglePlayPause = onToggleMedia3PlayPause,
+                        onSeekMs = onSeekMedia3Ms,
+                        onSkipMs = onSkipMedia3Ms,
+                        onCycleSpeed = onCycleMedia3Speed,
+                        onToggleBookmark = {
+                            feedState.player.activeStreamEpisodeId?.let(onToggleBookmark)
+                        },
+                        onOpenExternal = { ep ->
+                            launchExternalPodcast(ep, ep.externalUrl, ep.provider.displayName)
                         }
-
-                        // Scrub Slider + Playback Controls
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 20.dp, end = 20.dp, bottom = 18.dp)
-                        ) {
-                            Slider(
-                                value = uiState.playbackSeconds.toFloat(),
-                                onValueChange = { onSeek(it.toInt()) },
-                                valueRange = 0f..currentEp.durationSeconds.toFloat().coerceAtLeast(1f),
-                                colors = SliderDefaults.colors(
-                                    thumbColor = Color(0xFFFAF6EE),
-                                    activeTrackColor = SageSoft,
-                                    inactiveTrackColor = Color.White.copy(alpha = 0.22f)
-                                ),
-                                modifier = Modifier.testTag("podcast_progress_slider")
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = formatDurationSeconds(uiState.playbackSeconds),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = SageSoft
-                                )
-                                Text(
-                                    text = if (uiState.isPlayingAudio) "Playing preview…" else "Paused (demo timer)",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = SageSoft.copy(alpha = 0.8f)
-                                )
-                                Text(
-                                    text = formatDurationSeconds(currentEp.durationSeconds),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = SageSoft
-                                )
+                    )
+                } else {
+                    val featured = feedState.selectedEpisode
+                    FeaturedPodcastHeroCard(
+                        featured = featured,
+                        isBookmarked = featured.id in feedState.bookmarkedIds,
+                        isLoadingFeeds = feedState.isLoadingFeeds,
+                        feedStatusNote = feedState.feedStatusNote,
+                        onListenNow = {
+                            if (featured.supportsInAppPlayback) {
+                                onPlayStreamableEpisode(featured)
+                            } else {
+                                launchExternalPodcast(featured, featured.externalUrl, featured.provider.displayName)
                             }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceEvenly
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(50),
-                                    color = Color.White.copy(alpha = 0.14f),
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(50))
-                                        .clickable { onCycleSpeed() }
-                                        .testTag("podcast_speed_button")
-                                ) {
-                                    Text(
-                                        text = "${uiState.playbackSpeed}x",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = Color(0xFFFAF6EE),
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = { onSkip(-15) },
-                                    modifier = Modifier.testTag("podcast_rewind_button")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Replay10,
-                                        contentDescription = "Rewind 15 seconds",
-                                        tint = Color(0xFFFAF6EE),
-                                        modifier = Modifier.size(28.dp)
-                                    )
-                                }
-
-                                Surface(
-                                    shape = CircleShape,
-                                    color = Color(0xFFFAF6EE),
-                                    modifier = Modifier
-                                        .size(58.dp)
-                                        .clip(CircleShape)
-                                        .clickable { onTogglePlayPause() }
-                                        .testTag("podcast_play_pause_button")
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            imageVector = if (uiState.isPlayingAudio) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                            contentDescription = if (uiState.isPlayingAudio) "Pause episode" else "Play episode",
-                                            tint = ForestDeep,
-                                            modifier = Modifier.size(32.dp)
-                                        )
-                                    }
-                                }
-
-                                IconButton(
-                                    onClick = { onSkip(15) },
-                                    modifier = Modifier.testTag("podcast_forward_button")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Forward10,
-                                        contentDescription = "Forward 15 seconds",
-                                        tint = Color(0xFFFAF6EE),
-                                        modifier = Modifier.size(28.dp)
-                                    )
-                                }
-
-                                Icon(
-                                    imageVector = Icons.Rounded.GraphicEq,
-                                    contentDescription = null,
-                                    tint = if (uiState.isPlayingAudio) SageSoft else Color.White.copy(alpha = 0.35f),
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                        }
-                    }
+                        },
+                        onToggleBookmark = { onToggleBookmark(featured.id) },
+                        onRefreshFeeds = { onRefreshFeeds(true) }
+                    )
                 }
             }
 
-            // Topics Filter Row
+            // Category Filter Chips
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Topics",
+                        text = "Categories",
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onBackground
                     )
@@ -313,59 +167,57 @@ fun PodcastScreen(
                             .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        DemoRepository.podcastTopics.forEach { topic ->
+                        PodcastCategory.entries.forEach { category ->
                             FilterChip(
-                                selected = uiState.selectedPodcastTopic == topic,
-                                onClick = { onSelectTopic(topic) },
-                                label = { Text(topic) },
+                                selected = feedState.selectedCategory == category,
+                                onClick = { onSelectCategory(category) },
+                                label = { Text(category.label) },
                                 shape = RoundedCornerShape(50),
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = MaterialTheme.colorScheme.primary,
                                     selectedLabelColor = MaterialTheme.colorScheme.onPrimary
                                 ),
-                                modifier = Modifier.testTag("topic_filter_${topic.lowercase().replace(" ", "_")}")
+                                modifier = Modifier.testTag("category_filter_${category.name.lowercase()}")
                             )
                         }
+                    }
+
+                    if (feedState.liveFeedEpisodes.isNotEmpty()) {
+                        FilterChip(
+                            selected = feedState.showStreamableOnly,
+                            onClick = onToggleStreamableOnly,
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Rounded.GraphicEq,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            label = {
+                                Text("In-App Audio Ready (${feedState.liveFeedEpisodes.size})")
+                            },
+                            shape = RoundedCornerShape(50),
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer
+                            ),
+                            modifier = Modifier.testTag("filter_streamable_only")
+                        )
                     }
                 }
             }
 
-            // Conversation Styles Filter Row
+            // Episode Directory Section Header
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "Conversation Style",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        PodcastStyle.entries.forEach { style ->
-                            FilterChip(
-                                selected = uiState.selectedPodcastStyle == style,
-                                onClick = { onSelectStyle(style) },
-                                label = { Text(style.label) },
-                                shape = RoundedCornerShape(50),
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                    selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer
-                                ),
-                                modifier = Modifier.testTag("style_filter_${style.name.lowercase()}")
-                            )
-                        }
-                    }
+                val streamCount = filteredEpisodes.count { it.supportsInAppPlayback }
+                val subtitle = if (streamCount > 0) {
+                    "${filteredEpisodes.size} real podcasts • $streamCount streamable in-app"
+                } else {
+                    "${filteredEpisodes.size} verified motivational & wellness podcasts"
                 }
-            }
-
-            // Episode Library Header
-            item {
                 SectionHeader(
-                    title = "Episode Library",
-                    subtitle = "${filteredEpisodes.size} gentle listening sessions available"
+                    title = "Motivational & Wellness Podcasts",
+                    subtitle = subtitle
                 )
             }
 
@@ -383,11 +235,11 @@ fun PodcastScreen(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Text(
-                                text = "No episodes match both filters yet",
+                                text = "No episodes match this filter yet",
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                text = "Try switching back to All Topics or All Styles to browse the full demo library.",
+                                text = "Try selecting All categories or turning off the In-App Audio filter to browse all verified podcasts.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -396,45 +248,103 @@ fun PodcastScreen(
                 }
             } else {
                 items(filteredEpisodes, key = { it.id }) { episode ->
-                    PodcastEpisodeCard(
+                    val isThisStreaming = feedState.player.activeStreamEpisodeId == episode.id
+                    RealPodcastCard(
                         episode = episode,
-                        isSelected = episode.id == uiState.currentEpisodeId,
-                        isPlaying = episode.id == uiState.currentEpisodeId && uiState.isPlayingAudio,
-                        isBookmarked = episode.id in uiState.bookmarkedEpisodeIds,
-                        onPlaySelect = {
-                            if (episode.id == uiState.currentEpisodeId) onTogglePlayPause()
-                            else onSelectEpisode(episode.id)
+                        isSelected = episode.id == feedState.selectedEpisodeId,
+                        isPlayingInApp = isThisStreaming && feedState.player.isPlaying,
+                        isBookmarked = episode.id in feedState.bookmarkedIds,
+                        onOpenDetails = {
+                            onSelectEpisode(episode.id)
+                            detailSheetEpisode = episode
+                        },
+                        onQuickAction = {
+                            if (episode.supportsInAppPlayback) {
+                                if (isThisStreaming) {
+                                    onToggleMedia3PlayPause()
+                                } else {
+                                    onPlayStreamableEpisode(episode)
+                                }
+                            } else {
+                                launchExternalPodcast(episode, episode.externalUrl, episode.provider.displayName)
+                            }
                         },
                         onToggleBookmark = { onToggleBookmark(episode.id) }
                     )
                 }
             }
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(16.dp)
+        )
+    }
+
+    detailSheetEpisode?.let { selected ->
+        val isPlayingSelected =
+            feedState.player.activeStreamEpisodeId == selected.id && feedState.player.isPlaying
+        EpisodeDetailSheet(
+            episode = selected,
+            isPlayingThisInApp = isPlayingSelected,
+            isBookmarked = selected.id in feedState.bookmarkedIds,
+            onDismiss = { detailSheetEpisode = null },
+            onPlayInApp = {
+                if (feedState.player.activeStreamEpisodeId == selected.id) {
+                    onToggleMedia3PlayPause()
+                } else {
+                    onPlayStreamableEpisode(selected)
+                }
+                detailSheetEpisode = null
+            },
+            onOpenPrimaryExternal = {
+                launchExternalPodcast(selected, selected.externalUrl, selected.provider.displayName)
+                detailSheetEpisode = null
+            },
+            onOpenSecondaryExternal = {
+                val url = selected.secondaryUrl
+                val label = selected.secondaryProviderLabel ?: "Website"
+                if (!url.isNullOrBlank()) {
+                    launchExternalPodcast(selected, url, label)
+                }
+                detailSheetEpisode = null
+            },
+            onToggleBookmark = { onToggleBookmark(selected.id) }
+        )
     }
 }
 
 @Composable
-private fun PodcastEpisodeCard(
-    episode: PodcastEpisode,
+private fun RealPodcastCard(
+    episode: RealPodcastEpisode,
     isSelected: Boolean,
-    isPlaying: Boolean,
+    isPlayingInApp: Boolean,
     isBookmarked: Boolean,
-    onPlaySelect: () -> Unit,
+    onOpenDetails: () -> Unit,
+    onQuickAction: () -> Unit,
     onToggleBookmark: () -> Unit
 ) {
-    var expanded by remember(episode.id) { mutableStateOf(false) }
-
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .clickable { onOpenDetails() }
+            .testTag("podcast_card_${episode.id}"),
         shape = RoundedCornerShape(22.dp),
         color = if (isSelected) {
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
         } else {
             MaterialTheme.colorScheme.surface
         },
         border = BorderStroke(
             width = if (isSelected) 1.5.dp else 1.dp,
-            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+            color = if (isSelected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+            }
         )
     ) {
         Column(
@@ -442,42 +352,58 @@ private fun PodcastEpisodeCard(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Surface(
-                    shape = CircleShape,
-                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .clickable { onPlaySelect() }
-                        .testTag("episode_play_${episode.id}")
+                PodcastArtworkThumb(
+                    artworkUrl = episode.artworkUrl,
+                    contentDescription = "${episode.showTitle} artwork",
+                    size = 58.dp,
+                    cornerRadius = 14.dp
+                )
+
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            contentDescription = if (isPlaying) "Pause ${episode.title}" else "Play ${episode.title}",
-                            tint = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onPrimaryContainer
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = episode.category.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "•",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = if (episode.supportsInAppPlayback) {
+                                "In-App Audio"
+                            } else {
+                                episode.provider.displayName
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                }
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "${episode.topic} • ${episode.style.label} • ${episode.durationMinutes} min",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
                     Text(
                         text = episode.title,
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = episode.host,
+                        text = "${episode.showTitle} • ${episode.creator}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
@@ -487,69 +413,77 @@ private fun PodcastEpisodeCard(
                 ) {
                     Icon(
                         imageVector = if (isBookmarked) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkBorder,
-                        contentDescription = "Save episode",
+                        contentDescription = "Save ${episode.title}",
                         tint = MaterialTheme.colorScheme.primary
                     )
                 }
             }
 
             Text(
-                text = episode.summary,
+                text = episode.description,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f)
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.86f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
 
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable { expanded = !expanded }
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = if (expanded) "Hide gentle takeaways" else "View gentle takeaways & prompt",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold
+                    text = episode.publishedLabel?.let { "$it • ${episode.durationLabel}" } ?: episode.durationLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Icon(
-                    imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
 
-            AnimatedVisibility(visible = expanded) {
-                Column(
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f))
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onQuickAction() }
+                        .testTag("episode_listen_${episode.id}")
                 ) {
-                    Text(
-                        text = "Key Takeaways",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    episode.takeaways.forEach { point ->
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = when {
+                                episode.supportsInAppPlayback && isPlayingInApp -> Icons.Rounded.Pause
+                                episode.supportsInAppPlayback -> Icons.Rounded.PlayArrow
+                                else -> Icons.AutoMirrored.Rounded.OpenInNew
+                            },
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
                         Text(
-                            text = "• $point",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = when {
+                                episode.supportsInAppPlayback && isPlayingInApp -> "Pause"
+                                episode.supportsInAppPlayback -> "Play In-App"
+                                else -> "Listen Now"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Reflection Prompt: ${episode.reflectionPrompt}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
                 }
             }
         }
     }
+}
+
+private fun openExternalUrl(context: Context, url: String): Boolean {
+    return runCatching {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+        true
+    }.getOrDefault(false)
 }

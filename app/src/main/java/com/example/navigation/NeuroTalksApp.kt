@@ -347,14 +347,17 @@ fun NeuroTalksApp(
                     composable(NeuroTalksRoutes.PODCAST) {
                         PodcastScreen(
                             uiState = uiState,
-                            onSelectTopic = viewModel::selectPodcastTopic,
-                            onSelectStyle = viewModel::selectPodcastStyle,
-                            onSelectEpisode = { id -> viewModel.selectEpisode(id, autoPlay = true) },
-                            onTogglePlayPause = viewModel::togglePlayPause,
-                            onSeek = viewModel::seekAudio,
-                            onSkip = viewModel::skipAudio,
-                            onCycleSpeed = viewModel::cyclePlaybackSpeed,
-                            onToggleBookmark = viewModel::toggleBookmark
+                            onRefreshFeeds = viewModel::refreshPublicPodcastFeeds,
+                            onSelectCategory = viewModel::selectPodcastCategory,
+                            onToggleStreamableOnly = viewModel::toggleStreamableOnlyFilter,
+                            onSelectEpisode = viewModel::selectPodcastEpisode,
+                            onPlayStreamableEpisode = viewModel::playStreamableEpisode,
+                            onToggleMedia3PlayPause = viewModel::toggleMedia3PlayPause,
+                            onSeekMedia3Ms = viewModel::seekMedia3To,
+                            onSkipMedia3Ms = viewModel::skipMedia3By,
+                            onCycleMedia3Speed = viewModel::cycleMedia3Speed,
+                            onRecordExternalOpen = viewModel::recordExternalPodcastOpen,
+                            onToggleBookmark = viewModel::toggleRealPodcastBookmark
                         )
                     }
 

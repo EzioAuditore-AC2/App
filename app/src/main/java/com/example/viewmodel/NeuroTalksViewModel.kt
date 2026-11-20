@@ -10,8 +10,12 @@ import com.example.data.ForumCategory
 import com.example.data.ForumPost
 import com.example.data.ForumReply
 import com.example.data.MoodOption
-import com.example.data.PodcastEpisode
-import com.example.data.PodcastStyle
+import com.example.podcast.Media3PodcastPlayer
+import com.example.podcast.PodcastCatalog
+import com.example.podcast.PodcastCategory
+import com.example.podcast.PodcastFeedState
+import com.example.podcast.PodcastRssFetcher
+import com.example.podcast.RealPodcastEpisode
 import com.example.simulation.CharacterAppearance
 import com.example.simulation.DreamLifestyle
 import com.example.simulation.InteractableType
@@ -39,15 +43,10 @@ data class NeuroTalksUiState(
     val guidelinesAccepted: Boolean = false,
     val selectedMood: MoodOption? = null,
     val checkInsCompleted: Int = 1,
-    // Podcast state
-    val selectedPodcastTopic: String = "All Topics",
-    val selectedPodcastStyle: PodcastStyle = PodcastStyle.ALL,
-    val currentEpisodeId: String = DemoRepository.podcastEpisodes.first().id,
+    // Real Podcast & Media3 ExoPlayer state
+    val podcastFeed: PodcastFeedState = PodcastFeedState(),
     val isPlayingAudio: Boolean = false,
-    val playbackSeconds: Int = 92,
-    val playbackSpeed: Float = 1.0f,
-    val bookmarkedEpisodeIds: Set<String> = setOf("ep_1"),
-    val completedEpisodeIds: Set<String> = emptySet(),
+    val bookmarkedEpisodeIds: Set<String> = setOf(PodcastCatalog.curatedEpisodes.first().id),
     // Playable 2D Ideal Life Simulation state
     val lifeSim: LifeSimState = LifeSimState(
         milestones = LifeSimEngine.createMilestonesForLifestyle(DreamLifestyle.CREATIVE_CAREER)
@@ -61,11 +60,7 @@ data class NeuroTalksUiState(
     // Profile & settings
     val activities: List<ActivityEntry> = DemoRepository.initialActivities,
     val settings: DemoSettings = DemoSettings()
-) {
-    val currentEpisode: PodcastEpisode
-        get() = DemoRepository.podcastEpisodes.firstOrNull { it.id == currentEpisodeId }
-            ?: DemoRepository.podcastEpisodes.first()
-}
+)
 
 class NeuroTalksViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -74,7 +69,33 @@ class NeuroTalksViewModel(application: Application) : AndroidViewModel(applicati
     private val _uiState = MutableStateFlow(createInitialState())
     val uiState: StateFlow<NeuroTalksUiState> = _uiState.asStateFlow()
 
-    private var audioTimerJob: Job? = null
+    private var media3PollJob: Job? = null
+    private var feedRefreshJob: Job? = null
+
+    private val media3Player: Media3PodcastPlayer by lazy {
+        Media3PodcastPlayer(application.applicationContext) { isPlaying, isBuffering, posMs, durMs, error ->
+            _uiState.update { state ->
+                val currentPlayer = state.podcastFeed.player
+                state.copy(
+                    isPlayingAudio = isPlaying,
+                    podcastFeed = state.podcastFeed.copy(
+                        player = currentPlayer.copy(
+                            isPlaying = isPlaying,
+                            isBuffering = isBuffering,
+                            positionMs = posMs,
+                            durationMs = if (durMs > 0L) durMs else currentPlayer.durationMs,
+                            errorMessage = error
+                        )
+                    )
+                )
+            }
+            if (isPlaying || isBuffering) {
+                startMedia3ProgressPolling()
+            } else {
+                stopMedia3ProgressPolling()
+            }
+        }
+    }
 
     private fun createInitialState(): NeuroTalksUiState {
         val savedSim = lifeSimStorage.loadState()
@@ -112,106 +133,192 @@ class NeuroTalksViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    // --- Podcast Actions ---
+    // --- Real Podcast & Media3 Actions ---
 
-    fun selectPodcastTopic(topic: String) {
-        _uiState.update { it.copy(selectedPodcastTopic = topic) }
-    }
+    fun refreshPublicPodcastFeeds(force: Boolean = false) {
+        val currentFeed = _uiState.value.podcastFeed
+        if (!force && (currentFeed.isLoadingFeeds || currentFeed.liveFeedEpisodes.isNotEmpty())) return
 
-    fun selectPodcastStyle(style: PodcastStyle) {
-        _uiState.update { it.copy(selectedPodcastStyle = style) }
-    }
-
-    fun selectEpisode(episodeId: String, autoPlay: Boolean = true) {
-        val episode = DemoRepository.podcastEpisodes.firstOrNull { it.id == episodeId } ?: return
-        _uiState.update { state ->
-            val changed = state.currentEpisodeId != episodeId
-            state.copy(
-                currentEpisodeId = episodeId,
-                playbackSeconds = if (changed) 0 else state.playbackSeconds,
-                isPlayingAudio = autoPlay,
-                activities = if (changed) {
-                    prependActivity(
-                        state.activities,
-                        title = "Listening to Podcast",
-                        detail = episode.title,
-                        category = "Podcast"
+        feedRefreshJob?.cancel()
+        feedRefreshJob = viewModelScope.launch {
+            _uiState.update { state ->
+                state.copy(
+                    podcastFeed = state.podcastFeed.copy(
+                        isLoadingFeeds = true,
+                        feedStatusNote = "Loading public podcast streams…"
                     )
-                } else state.activities
-            )
-        }
-        if (autoPlay) startAudioTicker() else stopAudioTicker()
-    }
+                )
+            }
+            val liveEpisodes = runCatching {
+                PodcastRssFetcher.fetchPublicStreamableEpisodes(maxPerFeed = 4)
+            }.getOrDefault(emptyList())
 
-    fun togglePlayPause() {
-        val willPlay = !_uiState.value.isPlayingAudio
-        _uiState.update { it.copy(isPlayingAudio = willPlay) }
-        if (willPlay) startAudioTicker() else stopAudioTicker()
-    }
-
-    fun seekAudio(seconds: Int) {
-        val maxSec = _uiState.value.currentEpisode.durationSeconds
-        _uiState.update { it.copy(playbackSeconds = seconds.coerceIn(0, maxSec)) }
-    }
-
-    fun skipAudio(deltaSeconds: Int) {
-        seekAudio(_uiState.value.playbackSeconds + deltaSeconds)
-    }
-
-    fun cyclePlaybackSpeed() {
-        val next = when (_uiState.value.playbackSpeed) {
-            1.0f -> 1.25f
-            1.25f -> 1.5f
-            else -> 1.0f
-        }
-        _uiState.update { it.copy(playbackSpeed = next) }
-    }
-
-    fun toggleBookmark(episodeId: String) {
-        val episode = DemoRepository.podcastEpisodes.firstOrNull { it.id == episodeId } ?: return
-        _uiState.update { state ->
-            val exists = episodeId in state.bookmarkedEpisodeIds
-            val updated = if (exists) state.bookmarkedEpisodeIds - episodeId else state.bookmarkedEpisodeIds + episodeId
-            state.copy(
-                bookmarkedEpisodeIds = updated,
-                activities = if (!exists) {
-                    prependActivity(
-                        state.activities,
-                        title = "Saved Podcast Episode",
-                        detail = episode.title,
-                        category = "Podcast"
-                    )
-                } else state.activities
-            )
-        }
-    }
-
-    private fun startAudioTicker() {
-        audioTimerJob?.cancel()
-        audioTimerJob = viewModelScope.launch {
-            while (_uiState.value.isPlayingAudio) {
-                delay(1000L)
-                _uiState.update { state ->
-                    val maxSec = state.currentEpisode.durationSeconds
-                    val step = if (state.playbackSpeed >= 1.5f) 2 else 1
-                    val nextSec = (state.playbackSeconds + step).coerceAtMost(maxSec)
-                    if (nextSec >= maxSec) {
-                        state.copy(
-                            playbackSeconds = maxSec,
-                            isPlayingAudio = false,
-                            completedEpisodeIds = state.completedEpisodeIds + state.currentEpisodeId
-                        )
-                    } else {
-                        state.copy(playbackSeconds = nextSec)
-                    }
+            _uiState.update { state ->
+                val status = if (liveEpisodes.isNotEmpty()) {
+                    "${liveEpisodes.size} direct-stream episodes ready from NPR Life Kit & TED Talks Daily."
+                } else {
+                    "Offline or public feeds unavailable—verified Spotify, YouTube & official website links remain ready."
                 }
+                state.copy(
+                    podcastFeed = state.podcastFeed.copy(
+                        liveFeedEpisodes = liveEpisodes,
+                        isLoadingFeeds = false,
+                        feedStatusNote = status
+                    )
+                )
             }
         }
     }
 
-    private fun stopAudioTicker() {
-        audioTimerJob?.cancel()
-        audioTimerJob = null
+    fun selectPodcastCategory(category: PodcastCategory) {
+        _uiState.update { state ->
+            state.copy(
+                podcastFeed = state.podcastFeed.copy(selectedCategory = category)
+            )
+        }
+    }
+
+    fun toggleStreamableOnlyFilter() {
+        _uiState.update { state ->
+            state.copy(
+                podcastFeed = state.podcastFeed.copy(
+                    showStreamableOnly = !state.podcastFeed.showStreamableOnly
+                )
+            )
+        }
+    }
+
+    fun selectPodcastEpisode(episodeId: String) {
+        _uiState.update { state ->
+            state.copy(
+                podcastFeed = state.podcastFeed.copy(selectedEpisodeId = episodeId)
+            )
+        }
+    }
+
+    /**
+     * Plays a podcast directly inside the app via Android Media3 ExoPlayer.
+     * Strictly gated to episodes that provide a legitimate direct audio stream URL
+     * from official public RSS feeds. External links (Spotify/YouTube/web) are never streamed here.
+     */
+    fun playStreamableEpisode(episode: RealPodcastEpisode) {
+        val streamUrl = episode.directAudioStreamUrl
+        if (streamUrl.isNullOrBlank()) return
+
+        val speed = _uiState.value.podcastFeed.player.playbackSpeed
+        _uiState.update { state ->
+            state.copy(
+                podcastFeed = state.podcastFeed.copy(
+                    selectedEpisodeId = episode.id,
+                    player = state.podcastFeed.player.copy(
+                        activeStreamEpisodeId = episode.id,
+                        activeStreamTitle = episode.title,
+                        activeStreamCreator = "${episode.showTitle} • ${episode.creator}",
+                        activeStreamArtworkUrl = episode.artworkUrl,
+                        isBuffering = true,
+                        positionMs = if (state.podcastFeed.player.activeStreamEpisodeId == episode.id) {
+                            state.podcastFeed.player.positionMs
+                        } else 0L,
+                        durationMs = episode.durationMinutes * 60_000L,
+                        errorMessage = null
+                    )
+                ),
+                activities = prependActivity(
+                    state.activities,
+                    title = "Streaming Podcast In-App",
+                    detail = episode.title,
+                    category = "Podcast"
+                )
+            )
+        }
+        media3Player.playDirectStream(streamUrl, speed)
+    }
+
+    fun toggleMedia3PlayPause() {
+        if (_uiState.value.podcastFeed.player.activeStreamEpisodeId == null) return
+        media3Player.togglePlayPause()
+    }
+
+    fun seekMedia3To(positionMs: Long) {
+        if (_uiState.value.podcastFeed.player.activeStreamEpisodeId == null) return
+        media3Player.seekTo(positionMs)
+    }
+
+    fun skipMedia3By(deltaMs: Long) {
+        if (_uiState.value.podcastFeed.player.activeStreamEpisodeId == null) return
+        media3Player.skipBy(deltaMs)
+    }
+
+    fun cycleMedia3Speed() {
+        val currentSpeed = _uiState.value.podcastFeed.player.playbackSpeed
+        val next = when (currentSpeed) {
+            1.0f -> 1.25f
+            1.25f -> 1.5f
+            else -> 1.0f
+        }
+        _uiState.update { state ->
+            state.copy(
+                podcastFeed = state.podcastFeed.copy(
+                    player = state.podcastFeed.player.copy(playbackSpeed = next)
+                )
+            )
+        }
+        if (_uiState.value.podcastFeed.player.activeStreamEpisodeId != null) {
+            media3Player.setSpeed(next)
+        }
+    }
+
+    fun recordExternalPodcastOpen(episode: RealPodcastEpisode, platformName: String) {
+        _uiState.update { state ->
+            state.copy(
+                podcastFeed = state.podcastFeed.copy(selectedEpisodeId = episode.id),
+                activities = prependActivity(
+                    state.activities,
+                    title = "Opened on $platformName",
+                    detail = "${episode.showTitle}: ${episode.title}",
+                    category = "Podcast"
+                )
+            )
+        }
+    }
+
+    fun toggleRealPodcastBookmark(episodeId: String) {
+        val episode = _uiState.value.podcastFeed.allEpisodes.firstOrNull { it.id == episodeId } ?: return
+        _uiState.update { state ->
+            val exists = episodeId in state.podcastFeed.bookmarkedIds
+            val updated = if (exists) {
+                state.podcastFeed.bookmarkedIds - episodeId
+            } else {
+                state.podcastFeed.bookmarkedIds + episodeId
+            }
+            state.copy(
+                bookmarkedEpisodeIds = updated,
+                podcastFeed = state.podcastFeed.copy(bookmarkedIds = updated),
+                activities = if (!exists) {
+                    prependActivity(
+                        state.activities,
+                        title = "Saved Podcast",
+                        detail = episode.title,
+                        category = "Podcast"
+                    )
+                } else state.activities
+            )
+        }
+    }
+
+    private fun startMedia3ProgressPolling() {
+        if (media3PollJob?.isActive == true) return
+        media3PollJob = viewModelScope.launch {
+            while (_uiState.value.podcastFeed.player.isPlaying || _uiState.value.podcastFeed.player.isBuffering) {
+                delay(500L)
+                media3Player.pollProgress()
+            }
+        }
+    }
+
+    private fun stopMedia3ProgressPolling() {
+        media3PollJob?.cancel()
+        media3PollJob = null
     }
 
     // --- Playable 2D Ideal Life Simulation Actions ---
@@ -815,7 +922,10 @@ class NeuroTalksViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun resetDemoData() {
-        stopAudioTicker()
+        stopMedia3ProgressPolling()
+        if (_uiState.value.podcastFeed.player.activeStreamEpisodeId != null) {
+            media3Player.stop()
+        }
         lifeSimStorage.clearSavedProgress()
         _uiState.value = NeuroTalksUiState(guidelinesAccepted = _uiState.value.guidelinesAccepted)
     }
@@ -838,6 +948,10 @@ class NeuroTalksViewModel(application: Application) : AndroidViewModel(applicati
 
     override fun onCleared() {
         super.onCleared()
-        stopAudioTicker()
+        stopMedia3ProgressPolling()
+        feedRefreshJob?.cancel()
+        if (_uiState.value.podcastFeed.player.activeStreamEpisodeId != null) {
+            media3Player.release()
+        }
     }
 }

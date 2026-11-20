@@ -216,10 +216,11 @@ fun HomeScreen(
 
             // Feature Card 1: NeuroTalks Podcast
             item {
+                val activePodcast = uiState.podcastFeed.selectedEpisode
                 FeatureHeroCard(
                     title = "NeuroTalks Podcast",
-                    subtitle = "Up next: ${uiState.currentEpisode.title}",
-                    badge = "${uiState.currentEpisode.durationMinutes} min • ${uiState.currentEpisode.style.label}",
+                    subtitle = "Featured: ${activePodcast.title}",
+                    badge = "${activePodcast.category.label} • ${activePodcast.provider.displayName}",
                     icon = Icons.Rounded.Headphones,
                     accentBg = SageContainer,
                     accentTint = ForestDeep,
